@@ -128,7 +128,6 @@ class MPD {
 		return true;
 	}
 
-
 	private $_connected = false;
 	/**
 	* Checks whether the socket has connected
@@ -202,7 +201,7 @@ class MPD {
 	 * @param int $timeout The script's timeout, in seconds
 	 * @return array Array of parsed output
 	 */
-	private function runCommand( $command, $args = array(), $timeout = null ) {
+	public function runCommand( $command, $args = array(), $timeout = null ) {
 		// Cast the command and arguments to strings, and format properly
 		$toWrite = strval( $command );
 		foreach( (is_array( $args )? $args : array( $args )) as $arg ) {
@@ -220,6 +219,11 @@ class MPD {
 		return $this->parseOutput( $output );
 	}
 
+	/**
+	 * Parses an array of lines of output from MPD into tidier forms
+	 * @param array $output The output from MPD
+	 * @return string|array
+	 */
 	private function parseOutput( $output ) {
 		$parsedOutput = array();
 
