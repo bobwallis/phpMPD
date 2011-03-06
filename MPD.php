@@ -211,11 +211,23 @@ class MPD {
 		// Write command to MPD socket
 		$this->write( $toWrite );
 
-		// Read and return output
+		// Set the timeout
 		if( is_int( $timeout ) ) {
 			stream_set_timeout( $this->_connection, $timeout );
 		}
+		elseif( is_float( $timeout ) ) {
+			stream_set_timeout( $this->_connection, floor( $timeout ), round( ($timeout - floor( $timeout ))*1000000 ) );
+		}
+
+		// Read output
 		$output = $this->read();
+
+		// Return socket timeout to default
+		if( !is_null( $timeout ) ) {
+			stream_set_timeout( $this->_connection, ini_get( 'default_socket_timeout' ) );
+		}
+
+		// Return output
 		return $this->parseOutput( $output );
 	}
 
@@ -269,6 +281,37 @@ class MPD {
 		return array_map( function( $collection ) {
 			return (count( $collection ) == 1)? array_pop( $collection ) : $collection;
 		}, $parsedOutput );
+	}
+
+	/**
+	 * Excecuting the 'idle' function requires turning off timeouts, since it could take a long time
+	 * @param array $subsystems An array of particular subsystems to watch
+	 * @return string|array
+	 */
+	public function idle( $subsystems = array() ) {
+		$idle = $this->runCommand( 'idle', $subsystems, 1800 );
+		// When two subsystems are changed, only one is printed before the OK
+		// line. Anyone repeatedly polling a PHP script to simulate continuous
+		// listening will miss events as MPD creates a new 'client' on every
+		// request. This will frequently happen as it isn't uncommon for 'player'
+		// 'mixer', and 'playlist' events to fire at the same time (e.g. when someone
+		// double-clicks on a file to add it to the playlist and play in one go
+		// while playback is stopped)
+
+		// This is annoying. The best workaround I can think of is to use the
+		// 'subsystems' argument to split the idle polling into ones that
+		// are unlikely to collide.
+
+		// If the stream is local (so we can assume an extremely fast connection to it)
+		// then try to avoid missing changes by running new 'idle' requests with a
+		// short timeout. This will allow us to clear the queue of any additional
+		// changed systems without slowing down the script too much.
+		$idleArray = array( $idle );
+		if( stream_is_local( $this->_connection ) || $this->_host == 'localhost' ) {
+			try { array_push( $idleArray, $this->runCommand( 'idle', $subsystems, 0.1 ) ); }
+			catch( MPDException $e ) { return; }
+		}
+		return (count( $idleArray ) == 1)? $idle : $idleArray;
 	}
 
 	private $_commands = array( 'add', 'addid', 'clear', 'clearerror', 'close', 'commands', 'consume', 'count', 'crossfade', 'currentsong', 'decoders', 'delete', 'deleteid', 'disableoutput', 'enableoutput', 'find', 'findadd', 'idle', 'kill', 'list', 'listall', 'listallinfo', 'listplaylist', 'listplaylistinfo', 'listplaylists', 'load', 'lsinfo', 'mixrampdb', 'mixrampdelay', 'move', 'moveid', 'next', 'notcommands', 'outputs', 'password', 'pause', 'ping', 'play', 'playid', 'playlist', 'playlistadd', 'playlistclear', 'playlistdelete', 'playlistfind', 'playlistid', 'playlistinfo', 'playlistmove', 'playlistsearch', 'plchanges', 'plchangesposid', 'previous', 'random', 'rename', 'repeat', 'replay_gain_mode', 'replay_gain_status', 'rescan', 'rm', 'save', 'search', 'seek', 'seekid', 'setvol', 'shuffle', 'single', 'stats', 'status', 'sticker', 'stop', 'swap', 'swapid', 'tagtypes', 'update', 'urlhandlers' );
