@@ -15,7 +15,7 @@
  * A custom exception class
  * @package MPD
  */
-class MPDException extends \Exception {}
+class MPDException extends Exception {}
 
 /**
  * A PHP class for controlling MPD
@@ -130,9 +130,9 @@ class MPD {
 
 	private $_connected = false;
 	/**
-	* Checks whether the socket has connected
-	* @return bool
-	*/
+	 * Checks whether the socket has connected
+	 * @return bool
+	 */
 	public function isConnected() {
 		return $this->_connected;
 	}
@@ -187,6 +187,10 @@ class MPD {
 		}
 
 		if( $info['timed_out'] ) {
+			// I can't work out how to rescue a timed-out socket and get it working again. So just throw it away.
+			fclose( $this->_connection );
+			$this->_connection = null;
+			$this->_connected = false;
 			throw new MPDException( 'Command timed out', self::MPD_TIMEOUT );
 		}
 		else {
@@ -222,7 +226,7 @@ class MPD {
 		// Read output
 		$output = $this->read();
 
-		// Return socket timeout to default
+		// Reset timeout
 		if( !is_null( $timeout ) ) {
 			stream_set_timeout( $this->_connection, ini_get( 'default_socket_timeout' ) );
 		}
@@ -308,10 +312,10 @@ class MPD {
 		// changed systems without slowing down the script too much.
 		$idleArray = array( $idle );
 		if( stream_is_local( $this->_connection ) || $this->_host == 'localhost' ) {
-			try { array_push( $idleArray, $this->runCommand( 'idle', $subsystems, 0.1 ) ); }
-			catch( MPDException $e ) { return; }
+			try { while( 1 ) { array_push( $idleArray, $this->runCommand( 'idle', $subsystems, 0.1 ) ); } }
+			catch( MPDException $e ) { ; }
 		}
-		return (count( $idleArray ) == 1)? $idle : $idleArray;
+		return (count( $idleArray ) == 1)? $idleArray[0] : $idleArray;
 	}
 
 	private $_commands = array( 'add', 'addid', 'clear', 'clearerror', 'close', 'commands', 'consume', 'count', 'crossfade', 'currentsong', 'decoders', 'delete', 'deleteid', 'disableoutput', 'enableoutput', 'find', 'findadd', 'idle', 'kill', 'list', 'listall', 'listallinfo', 'listplaylist', 'listplaylistinfo', 'listplaylists', 'load', 'lsinfo', 'mixrampdb', 'mixrampdelay', 'move', 'moveid', 'next', 'notcommands', 'outputs', 'password', 'pause', 'ping', 'play', 'playid', 'playlist', 'playlistadd', 'playlistclear', 'playlistdelete', 'playlistfind', 'playlistid', 'playlistinfo', 'playlistmove', 'playlistsearch', 'plchanges', 'plchangesposid', 'previous', 'random', 'rename', 'repeat', 'replay_gain_mode', 'replay_gain_status', 'rescan', 'rm', 'save', 'search', 'seek', 'seekid', 'setvol', 'shuffle', 'single', 'stats', 'status', 'sticker', 'stop', 'swap', 'swapid', 'tagtypes', 'update', 'urlhandlers' );
