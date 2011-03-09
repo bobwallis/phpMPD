@@ -172,12 +172,15 @@ class MPD {
 			$line = trim( fgets( $this->_connection ) );
 			$info = stream_get_meta_data( $this->_connection );
 			$matches = array();
+			// We get empty lines sometimes. Ignore them.
 			if( empty( $line ) ) {
 				continue;
 			}
+			// If we get an OK then the command has finished
 			elseif( strcmp( self::MPD_OK, $line ) == 0 ) {
 				break;
 			}
+			// Catch errors
 			elseif( strncmp( self::MPD_ERROR, $line, strlen( self::MPD_ERROR ) ) == 0 && preg_match( '/^ACK \[(.*?)\@(.*?)\] \{(.*?)\} (.*?)$/', $line, $matches ) ) {
 				throw new MPDException( 'Command failed: '.$matches[4], self::MPD_COMMAND_FAILED );
 			}
@@ -232,7 +235,7 @@ class MPD {
 		}
 
 		// Return output
-		return $this->parseOutput( $output );
+		return $this->parseOutput( $output, $command );
 	}
 
 	/**
@@ -240,7 +243,7 @@ class MPD {
 	 * @param array $output The output from MPD
 	 * @return string|array
 	 */
-	private function parseOutput( $output ) {
+	private function parseOutput( $output, $command = '' ) {
 		$parsedOutput = array();
 
 		// Check for empty output, meaning that just 'OK' was printed
@@ -260,20 +263,47 @@ class MPD {
 			return $output[0][1];
 		}
 
-		// Iterate over the lines. We collect key=>value pairs into a single array until
-		// we get a key that we've already had, in which case we'll append the array to
-		// the $parsedOutput array, and begin collecting again.
-		$collection = array();
-		foreach( $output as $line ) {
-			if( array_key_exists( $line[0], $collection ) ) {
+		// Some commands have custom parsing
+		switch( $command ) {
+			case 'decoders':
+				// The 'plugin' lines are used as keys for objects that contain
+				// arrays of 'mime_type's and 'suffix's
+				$collection = array();
+				$currentPlugin = '';
+				foreach( $output as $line ) {
+					if( $line[0] == 'plugin' ) {
+						if( $currentPlugin) {
+							$parsedOutput[$currentPlugin] = $collection;
+						}
+						$currentPlugin = $line[1];
+						$collection = array();
+					}
+					else {
+						if( !isset( $collection[$line[0]] ) ) {
+							$collection[$line[0]] = array();
+						}
+						$collection[$line[0]][] = $line[1];
+					}
+				}
+				$parsedOutput[$currentPlugin] = $collection;
+				break;
+			default:
+				// Iterate over the lines. We collect key=>value pairs into a single array until
+				// we get a key that we've already had, in which case we'll append the array to
+				// the $parsedOutput array, and begin collecting again.
+				$collection = array();
+				foreach( $output as $line ) {
+					if( array_key_exists( $line[0], $collection ) ) {
+						$parsedOutput[] = $collection;
+						$collection = array( $line[0] => $line[1] );
+					}
+					else {
+						$collection[$line[0]] = $line[1];
+					}
+				}
 				$parsedOutput[] = $collection;
-				$collection = array( $line[0] => $line[1] );
-			}
-			else {
-				$collection[$line[0]] = $line[1];
-			}
+				break;
 		}
-		$parsedOutput[] = $collection;
 
 		// If we have a single collection, return it
 		if( count( $parsedOutput ) == 1 ) {
@@ -310,6 +340,7 @@ class MPD {
 		// then try to avoid missing changes by running new 'idle' requests with a
 		// short timeout. This will allow us to clear the queue of any additional
 		// changed systems without slowing down the script too much.
+		// This works reasonably well, but YMMV.
 		$idleArray = array( $idle );
 		if( stream_is_local( $this->_connection ) || $this->_host == 'localhost' ) {
 			try { while( 1 ) { array_push( $idleArray, $this->runCommand( 'idle', $subsystems, 0.1 ) ); } }
