@@ -239,17 +239,17 @@ class MPD {
 	}
 
 	/**
+	 * This is an array of commands whose output is expected to be an array
+	 */
+	private $_expectArrayOutput = array( 'commands', 'decoders', 'find', 'list', 'listall', 'listallinfo', 'listplaylist', 'listplaylistinfo', 'listplaylists', 'lsinfo', 'notcommands', 'outputs', 'playlist', 'playlistfind', 'playlistid', 'playlistinfo', 'playlistsearch', 'plchanges', 'plchangesposid', 'search', 'tagtypes', 'urlhandlers' );
+
+	/**
 	 * Parses an array of lines of output from MPD into tidier forms
 	 * @param array $output The output from MPD
 	 * @return string|array
 	 */
 	private function parseOutput( $output, $command = '' ) {
 		$parsedOutput = array();
-
-		// Check for empty output, meaning that just 'OK' was printed
-		if( $output === array() ) {
-			return true;
-		}
 
 		// Output lines should look like 'key: value'.
 		// Explode the lines, and filter out any empty values
@@ -258,63 +258,96 @@ class MPD {
 			return (count( $parts ) == 2)? $parts : false;
 		}, $output ) );
 
+		// If there's no output the command succeded
+		if( count( $output ) == 0 ) {
+			// For some commands returning an empty array makes more sense than true
+			return (in_array( $command, $this->_expectArrayOutput ))? array() : true;
+		}
 		// If there's only one line of output, just return the value
-		if( count( $output ) == 1 ) {
-			return $output[0][1];
+		elseif( count( $output ) == 1 ) {
+			// Again, for some commands it makes sense to force $output to be an array, even if it contains only one value
+			return (in_array( $command, $this->_expectArrayOutput ))? array( $output[0][1] ) : $output[0][1];
 		}
 
-		// Some commands have custom parsing
+		/* The output we recieve will look like one of a few cases:
+		 *  1) A list (possible of length 1) of objects with certain single-valued properties
+		 *     (e.g. a list of songs in a playlist with metadata)
+		 *  2) A list of properties
+		 *     (e.g. a list of supported output types)
+		 *  3) An unordered set of objects with (possibly array-valued) properties
+		 *     (e.g. a list of playlists indexed by name, output plugins indexed by name with arrays of supported extensions/types)
+		 *  4) Single/Zero value responses
+		 *
+		 * Case 4 is taken care of.
+		 * We handle case 1 by iterating over the key=>value pairs, dropping
+		 * them into a map until we reach a key that we've already seen, in which
+		 * case we append the map so far into the output array, and begin a new
+		 * collection.
+		 * Case 2 can be dealt with by the same algorithm if at the end we collpase
+		 * single-property objects to the value of the single property.
+		 * Case 1/2 is assumed by default. Case 3 outputs are treated as special cases.
+		 *
+		 * There is another possible case: A list of objects with possibly array-valued properties.
+		 * There isn't an example of this, so no worries.
+		 */
+		$topKey = false;
 		switch( $command ) {
 			case 'decoders':
-				// The 'plugin' lines are used as keys for objects that contain
-				// arrays of 'mime_type's and 'suffix's
-				$collection = array();
-				$currentPlugin = '';
-				foreach( $output as $line ) {
-					if( $line[0] == 'plugin' ) {
-						if( $currentPlugin) {
-							$parsedOutput[$currentPlugin] = $collection;
-						}
-						$currentPlugin = $line[1];
-						$collection = array();
-					}
-					else {
-						if( !isset( $collection[$line[0]] ) ) {
-							$collection[$line[0]] = array();
-						}
-						$collection[$line[0]][] = $line[1];
-					}
-				}
-				$parsedOutput[$currentPlugin] = $collection;
+				$topKey = 'plugin';
+				break;
+			case 'listplaylists':
+				$topKey = 'playlist';
 				break;
 			default:
-				// Iterate over the lines. We collect key=>value pairs into a single array until
-				// we get a key that we've already had, in which case we'll append the array to
-				// the $parsedOutput array, and begin collecting again.
-				$collection = array();
-				foreach( $output as $line ) {
-					if( array_key_exists( $line[0], $collection ) ) {
-						$parsedOutput[] = $collection;
-						$collection = array( $line[0] => $line[1] );
-					}
-					else {
-						$collection[$line[0]] = $line[1];
-					}
-				}
-				$parsedOutput[] = $collection;
 				break;
 		}
+		if( $topKey ) {
+			$collection = array();
+			$currentTopValue = '';
+			foreach( $output as $line ) {
+				if( $line[0] == $topKey ) {
+					if( $currentTopValue ) {
+						$parsedOutput[$currentTopValue] = $collection;
+					}
+					$currentTopValue = $line[1];
+					$collection = array();
+				}
+				else {
+					if( !isset( $collection[$line[0]] ) ) {
+						$collection[$line[0]] = array();
+					}
+					$collection[$line[0]][] = $line[1];
+				}
+			}
+			$parsedOutput[$currentTopValue] = $collection;
 
-		// If we have a single collection, return it
-		if( count( $parsedOutput ) == 1 ) {
-			return $parsedOutput[0];
+			// Output will always be an array
+			return $parsedOutput;
 		}
+		else {
+			$collection = array();
+			foreach( $output as $line ) {
+				if( array_key_exists( $line[0], $collection ) ) {
+					$parsedOutput[] = $collection;
+					$collection = array( $line[0] => $line[1] );
+				}
+				else {
+					$collection[$line[0]] = $line[1];
+				}
+			}
+			$parsedOutput[] = $collection;
 
-		// If there's only one key in a collection, then collapse it to just the value.
-		// Then return
-		return array_map( function( $collection ) {
-			return (count( $collection ) == 1)? array_pop( $collection ) : $collection;
-		}, $parsedOutput );
+			// If we have a single collection, return it as a single object if we don't expect an array
+			if( count( $parsedOutput ) == 1 ) {
+				return (in_array( $command, $this->_expectArrayOutput ))? $parsedOutput : $parsedOutput[0];
+			}
+
+			// If there's only one property in an object, then collapse it to just that value.
+			// Otherwise just return what we have
+			return array_map( function( $collection ) {
+				return (count( $collection ) == 1)? array_pop( $collection ) : $collection;
+			}, $parsedOutput );
+		}
 	}
 
 	/**
